@@ -1,0 +1,104 @@
+app: test
+
+service: pizzaApp
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  region: us-east-1
+  environment:
+    REGION: ${self:provider.region}
+  iam:
+    role: 
+      statements:
+        - Effect: Allow
+          Action: 
+            - sqs:sendMessage
+          Resource: 
+            Fn::GetAtt: [PendingOrderQueue, Arn]
+        - Effect: Allow
+          Action: 
+            - sqs:sendMessage
+          Resource: 
+            Fn::GetAtt: [SendingOrderQueue, Arn]
+        - Effect: Allow
+          Action: 
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:GetItem
+          Resource: 
+            Fn::GetAtt: [OrdersTable, Arn]
+
+
+functions:
+  newOrder:
+    # handler: handler.hello # file handler, method hello
+    handler: handler.newOrder
+    environment:
+      PENDING_ORDER_QUEUE:
+        Ref: PendingOrderQueue
+      ORDERS_TABLE:
+        Ref: OrdersTable
+    events:
+      - httpApi:
+          path: /order
+          method: post
+  getOrder:
+    handler: handler.getOrder
+    environment:
+      ORDERS_TABLE:
+        Ref: OrdersTable
+    events:
+      - httpApi:
+          path: /order/{id}
+          method: get
+
+  prepOrder:
+    handler: handler.prepOrder
+    environment:
+      ORDERS_TABLE:
+        Ref: OrdersTable
+    events:
+      - sqs: 
+          arn:
+            Fn::GetAtt: [PendingOrderQueue, Arn]
+          batchSize: 1
+  sendOrder:
+    handler: handler.sendOrder
+    environment:
+      SENDING_ORDER_QUEUE:
+        Ref: SendingOrderQueue
+    events:
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt: [OrdersTable, StreamArn]
+          filterPatterns:
+            - eventName: [MODIFY]
+          batchSize: 1
+
+resources:
+    Resources:
+      PendingOrderQueue:
+        Type: AWS::SQS::Queue
+        Properties:
+          QueueName: pendingOrderQueue
+      SendingOrderQueue:
+        Type: AWS::SQS::Queue
+        Properties:
+          QueueName: sendOrderQueue
+      OrdersTable:
+        Type: AWS::DynamoDB::Table
+        Properties:
+          TableName: OrdersTable
+          AttributeDefinitions:
+            - AttributeName: orderId
+              AttributeType: S
+          KeySchema:
+            - AttributeName: orderId
+              KeyType: HASH
+          ProvisionedThroughput:
+            ReadCapacityUnits: 1
+            WriteCapacityUnits: 1
+          StreamSpecification:
+            StreamViewType: NEW_AND_OLD_IMAGES
